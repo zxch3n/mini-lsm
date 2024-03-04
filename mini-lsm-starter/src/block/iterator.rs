@@ -64,12 +64,7 @@ impl BlockIterator {
 
     /// Seeks to the first key in the block.
     pub fn seek_to_first(&mut self) {
-        let d = &self.block.data;
-        let key_len = u16::from_be_bytes([d[0], d[1]]) as usize;
-        self.key = Key::from_vec(d[2..2 + key_len].to_vec());
-        let value_len = u16::from_be_bytes([d[2 + key_len], d[3 + key_len]]) as usize;
-        self.value_range = (4 + key_len, 4 + key_len + value_len);
-        self.first_key = self.key.clone();
+        self.seek_nth(0);
     }
 
     /// Move to the next key in the block.
@@ -113,6 +108,11 @@ impl BlockIterator {
 
             mid = (min + max) / 2;
             mid_v = self.get_nth_key(mid);
+        }
+
+        // find the first key that >= key
+        while mid > 0 && self.get_nth_key(mid - 1) >= key {
+            mid -= 1;
         }
 
         self.seek_nth(mid)
