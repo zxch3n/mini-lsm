@@ -11,7 +11,7 @@ use crossbeam_skiplist::SkipMap;
 use ouroboros::self_referencing;
 
 use crate::iterators::StorageIterator;
-use crate::key::KeySlice;
+use crate::key::{Key, KeySlice};
 use crate::table::SsTableBuilder;
 use crate::wal::Wal;
 
@@ -104,8 +104,25 @@ impl MemTable {
     }
 
     /// Get an iterator over a range of keys.
-    pub fn scan(&self, _lower: Bound<&[u8]>, _upper: Bound<&[u8]>) -> MemTableIterator {
-        unimplemented!()
+    pub fn scan(&self, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> MemTableIterator {
+        let lower = match lower {
+            Bound::Included(x) => Bound::Included(Bytes::copy_from_slice(x)),
+            Bound::Excluded(x) => Bound::Excluded(Bytes::copy_from_slice(x)),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        let upper = match upper {
+            Bound::Included(x) => Bound::Included(Bytes::copy_from_slice(x)),
+            Bound::Excluded(x) => Bound::Excluded(Bytes::copy_from_slice(x)),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
+        let mut ans = MemTableIterator::new(
+            self.map.clone(),
+            |this| this.range((lower, upper)),
+            (Bytes::new(), Bytes::new()),
+        );
+        ans.next().unwrap_or_default();
+        ans
     }
 
     /// Flush the mem-table to SSTable. Implement in week 1 day 6.
@@ -151,18 +168,39 @@ impl StorageIterator for MemTableIterator {
     type KeyType<'a> = KeySlice<'a>;
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.with_item(|(_, v)| v)
     }
 
     fn key(&self) -> KeySlice {
-        unimplemented!()
+        self.with_item(|(k, _)| Key::from_slice(k))
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.with_item(|(k, v)| !k.is_empty() || !v.is_empty())
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        let next = self.with_iter_mut(|iter| {
+            let Some(next) = iter.next() else {
+                return None;
+            };
+
+            Some((next.key().clone(), next.value().clone()))
+        });
+
+        match next {
+            Some(next) => {
+                self.with_item_mut(|item| {
+                    *item = next;
+                });
+            }
+            None => {
+                self.with_item_mut(|item| {
+                    *item = (Bytes::new(), Bytes::new());
+                });
+            }
+        }
+
+        Ok(())
     }
 }

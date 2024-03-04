@@ -47,7 +47,30 @@ pub struct MergeIterator<I: StorageIterator> {
 
 impl<I: StorageIterator> MergeIterator<I> {
     pub fn create(iters: Vec<Box<I>>) -> Self {
-        unimplemented!()
+        let mut merge = Self {
+            iters: iters
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, x)| {
+                    if x.is_valid() {
+                        Some(HeapWrapper(i, x))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            current: None,
+        };
+        merge.pop_into_current();
+        merge
+    }
+
+    fn pop_into_current(&mut self) {
+        self.current = self.iters.pop();
+        // skip invalid
+        while self.current.is_some() && !self.current.as_ref().unwrap().1.is_valid() {
+            self.current = self.iters.pop();
+        }
     }
 }
 
@@ -57,18 +80,54 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
     type KeyType<'a> = KeySlice<'a>;
 
     fn key(&self) -> KeySlice {
-        unimplemented!()
+        self.current.as_ref().unwrap().1.key()
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.current.as_ref().unwrap().1.value()
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.current.is_some()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        let Some(mut cur) = std::mem::take(&mut self.current) else {
+            return Ok(());
+        };
+
+        self.pop_the_same_key_as(cur.1.key())?;
+        if let Err(e) = cur.1.next() {
+            return Err(e);
+        } else if cur.1.is_valid() {
+            self.iters.push(cur);
+        }
+
+        self.pop_into_current();
+        Ok(())
+    }
+}
+
+impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> MergeIterator<I> {
+    fn pop_the_same_key_as(&mut self, key: I::KeyType<'_>) -> Result<()> {
+        while let Some(top) = self.iters.peek() {
+            if !top.1.is_valid() {
+                self.iters.pop();
+                continue;
+            }
+
+            if top.1.key() == key {
+                let mut top = self.iters.pop().unwrap();
+                if let Err(e) = top.1.next() {
+                    return Err(e);
+                } else if top.1.is_valid() {
+                    self.iters.push(top);
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(())
     }
 }
