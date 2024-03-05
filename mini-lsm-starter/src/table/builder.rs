@@ -61,6 +61,12 @@ impl SsTableBuilder {
                 block.nth_key(block.len_entries() - 1),
             )),
         });
+
+        if self.data.len() > 1024 * 1024 && self.data.capacity() < 1024 * 1024 * 256 {
+            self.data.reserve(1024 * 1024 * 256 - self.data.len());
+            debug_assert!(self.data.capacity() == 1024 * 1024 * 256);
+        }
+
         self.data.extend_from_slice(&block.encode());
     }
 
