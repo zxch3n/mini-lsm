@@ -8,6 +8,8 @@ pub use builder::BlockBuilder;
 use bytes::Bytes;
 pub use iterator::BlockIterator;
 
+use crate::key::{Key, KeySlice};
+
 /// A block is the smallest unit of read and caching in LSM tree. It is a collection of sorted key-value pairs.
 pub struct Block {
     pub(crate) data: Vec<u8>,
@@ -41,5 +43,16 @@ impl Block {
             data: block_data,
             offsets,
         }
+    }
+
+    pub fn len_entries(&self) -> usize {
+        self.offsets.len()
+    }
+
+    pub fn nth_key(&self, n: usize) -> &[u8] {
+        let start = self.offsets[n] as usize;
+        let d = &self.data;
+        let len = u16::from_be_bytes([d[start], d[start + 1]]) as usize;
+        &d[start + 2..start + 2 + len]
     }
 }
