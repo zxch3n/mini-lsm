@@ -81,4 +81,8 @@ impl<
 
         self.skip_b_that_eq_a()
     }
+
+    fn num_active_iterators(&self) -> usize {
+        self.a.num_active_iterators() + self.b.num_active_iterators()
+    }
 }

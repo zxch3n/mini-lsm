@@ -105,6 +105,14 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
         self.pop_into_current();
         Ok(())
     }
+
+    fn num_active_iterators(&self) -> usize {
+        let mut ans: usize = self.iters.iter().map(|x| x.1.num_active_iterators()).sum();
+        if let Some(c) = self.current.as_ref() {
+            ans += c.1.num_active_iterators();
+        }
+        ans
+    }
 }
 
 impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> MergeIterator<I> {

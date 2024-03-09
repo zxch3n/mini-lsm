@@ -1,12 +1,13 @@
 #![allow(dead_code)] // REMOVE THIS LINE after fully implementing this functionality
 
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use bytes::Bytes;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 
@@ -23,7 +24,7 @@ use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
 use crate::mem_table::MemTable;
 use crate::mvcc::LsmMvccInner;
-use crate::table::{SsTable, SsTableIterator};
+use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
 pub type BlockCache = moka::sync::Cache<(usize, usize), Arc<Block>>;
 
@@ -158,7 +159,8 @@ impl Drop for MiniLsm {
 
 impl MiniLsm {
     pub fn close(&self) -> Result<()> {
-        unimplemented!()
+        let _a = self.inner.state_lock.lock();
+        Ok(())
     }
 
     /// Start the storage engine by either loading an existing directory or creating a new one if the directory does
@@ -256,6 +258,8 @@ impl LsmStorageInner {
             CompactionOptions::NoCompaction => CompactionController::NoCompaction,
         };
 
+        // create file and directory on path if not exist
+        let _ = std::fs::create_dir_all(path);
         let storage = Self {
             state: Arc::new(RwLock::new(Arc::new(state))),
             state_lock: Mutex::new(()),
@@ -384,7 +388,28 @@ impl LsmStorageInner {
 
     /// Force flush the earliest-created immutable memtable to disk
     pub fn force_flush_next_imm_memtable(&self) -> Result<()> {
-        unimplemented!()
+        let table = {
+            let mut s = self.state.write();
+            let s = Arc::make_mut(&mut s);
+            let Some(table) = s.imm_memtables.pop() else {
+                return Ok(());
+            };
+            table
+        };
+        let _s = self.state_lock.lock();
+        let id = self.next_sst_id();
+        let mut builder = SsTableBuilder::new(self.options.block_size);
+        table.flush(&mut builder)?;
+        let sstable = builder.build(
+            id,
+            Some(self.block_cache.clone()),
+            self.path.join(format!("{}.sst", id)).clone(),
+        )?;
+        let mut s = self.state.write();
+        let s = Arc::make_mut(&mut s);
+        s.l0_sstables.insert(0, id);
+        s.sstables.insert(id, Arc::new(sstable));
+        Ok(())
     }
 
     pub fn new_txn(&self) -> Result<()> {
@@ -411,6 +436,13 @@ impl LsmStorageInner {
         let mut sstable_iters = Vec::with_capacity(state.sstables.len());
         for id in state.l0_sstables.iter() {
             let t = state.sstables.get(id).unwrap();
+            if !range_overlap(
+                (lower, upper),
+                (t.first_key().raw_ref(), t.last_key().raw_ref()),
+            ) {
+                continue;
+            }
+
             sstable_iters.push(match lower {
                 Bound::Included(x) => Box::new(
                     SsTableIterator::create_and_seek_to_key(t.clone(), KeySlice::from_slice(x))
@@ -443,4 +475,42 @@ impl LsmStorageInner {
         )?);
         Ok(iter)
     }
+}
+
+fn range_overlap(a: (Bound<&[u8]>, Bound<&[u8]>), b: (&[u8], &[u8])) -> bool {
+    if matches!(a, (Bound::Unbounded, Bound::Unbounded)) {
+        return true;
+    }
+
+    let (a_lower, a_upper) = a;
+    let (b_lower, b_upper) = b;
+    match a_lower {
+        Bound::Included(x) => {
+            if x > b_upper {
+                return false;
+            }
+        }
+        Bound::Excluded(x) => {
+            if x >= b_upper {
+                return false;
+            }
+        }
+        Bound::Unbounded => {}
+    }
+
+    match a_upper {
+        Bound::Included(x) => {
+            if x < b_lower {
+                return false;
+            }
+        }
+        Bound::Excluded(x) => {
+            if x <= b_lower {
+                return false;
+            }
+        }
+        Bound::Unbounded => {}
+    }
+
+    true
 }
