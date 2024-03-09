@@ -167,7 +167,14 @@ where
         );
         iter.next().unwrap();
     }
-    assert!(!iter.is_valid());
+
+    iter.is_valid();
+    assert!(
+        !iter.is_valid(),
+        "Iter should be invalid now. But it still has value {:?} {:?}",
+        iter.key(),
+        iter.value()
+    );
 }
 
 pub fn expect_iter_error(mut iter: impl StorageIterator) {

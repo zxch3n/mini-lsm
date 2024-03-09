@@ -19,7 +19,31 @@ impl<
     > TwoMergeIterator<A, B>
 {
     pub fn create(a: A, b: B) -> Result<Self> {
-        unimplemented!()
+        let mut ans = Self { a, b };
+        ans.skip_b_that_eq_a()?;
+        Ok(ans)
+    }
+
+    fn skip_b_that_eq_a(&mut self) -> Result<(), anyhow::Error> {
+        while self.a.is_valid() && self.b.is_valid() && self.b.key() == self.a.key() {
+            self.b.next()?;
+        }
+
+        Ok(())
+    }
+}
+
+impl<
+        A: 'static + StorageIterator,
+        B: 'static + for<'a> StorageIterator<KeyType<'a> = A::KeyType<'a>>,
+    > TwoMergeIterator<A, B>
+{
+    fn is_cur_a(&self) -> bool {
+        if self.a.is_valid() && self.b.is_valid() {
+            self.a.key() <= self.b.key()
+        } else {
+            self.a.is_valid()
+        }
     }
 }
 
@@ -31,18 +55,30 @@ impl<
     type KeyType<'a> = A::KeyType<'a>;
 
     fn key(&self) -> Self::KeyType<'_> {
-        unimplemented!()
+        match self.is_cur_a() {
+            true => self.a.key(),
+            false => self.b.key(),
+        }
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        match self.is_cur_a() {
+            true => self.a.value(),
+            false => self.b.value(),
+        }
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.a.is_valid() || self.b.is_valid()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        if self.is_cur_a() {
+            self.a.next()?;
+        } else {
+            self.b.next()?;
+        }
+
+        self.skip_b_that_eq_a()
     }
 }

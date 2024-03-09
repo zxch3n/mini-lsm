@@ -1,23 +1,58 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
+use std::{
+    fmt::Debug,
+    ops::{Bound, Deref},
+};
+
 use anyhow::{bail, Result};
 
 use crate::{
-    iterators::{merge_iterator::MergeIterator, StorageIterator},
+    iterators::{
+        merge_iterator::MergeIterator, two_merge_iterator::TwoMergeIterator, StorageIterator,
+    },
+    key::KeyBytes,
     mem_table::MemTableIterator,
+    table::SsTableIterator,
 };
 
 /// Represents the internal type for an LSM iterator. This type will be changed across the tutorial for multiple times.
-type LsmIteratorInner = MergeIterator<MemTableIterator>;
+type LsmIteratorInner =
+    TwoMergeIterator<MergeIterator<MemTableIterator>, MergeIterator<SsTableIterator>>;
 
 pub struct LsmIterator {
     inner: LsmIteratorInner,
+    end_when: Bound<Vec<u8>>,
+    ended: bool,
 }
 
 impl LsmIterator {
     pub(crate) fn new(iter: LsmIteratorInner) -> Result<Self> {
-        Ok(Self { inner: iter })
+        Ok(Self {
+            inner: iter,
+            ended: false,
+            end_when: Bound::Unbounded,
+        })
+    }
+
+    pub(crate) fn new_with_end_when(
+        iter: LsmIteratorInner,
+        end_when: Bound<Vec<u8>>,
+    ) -> Result<Self> {
+        Ok(Self {
+            ended: !iter.is_valid() || !in_bound(iter.key().raw_ref(), &end_when),
+            inner: iter,
+            end_when,
+        })
+    }
+}
+
+fn in_bound(key: &[u8], end: &Bound<Vec<u8>>) -> bool {
+    match end {
+        Bound::Included(e) => key <= e.deref(),
+        Bound::Excluded(e) => key < e.deref(),
+        Bound::Unbounded => true,
     }
 }
 
@@ -25,7 +60,7 @@ impl StorageIterator for LsmIterator {
     type KeyType<'a> = &'a [u8];
 
     fn is_valid(&self) -> bool {
-        self.inner.is_valid()
+        self.inner.is_valid() && !self.ended
     }
 
     fn key(&self) -> &[u8] {
@@ -37,7 +72,9 @@ impl StorageIterator for LsmIterator {
     }
 
     fn next(&mut self) -> Result<()> {
-        self.inner.next()
+        self.inner.next()?;
+        self.ended = !self.inner.is_valid() || !in_bound(self.key(), &self.end_when);
+        Ok(())
     }
 }
 
@@ -69,7 +106,10 @@ impl<I: StorageIterator> FusedIterator<I> {
     }
 }
 
-impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
+impl<I: StorageIterator> StorageIterator for FusedIterator<I>
+where
+    for<'a> I::KeyType<'a>: Debug,
+{
     type KeyType<'a> = I::KeyType<'a> where Self: 'a;
 
     fn is_valid(&self) -> bool {

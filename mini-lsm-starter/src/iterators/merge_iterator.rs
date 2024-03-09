@@ -97,9 +97,8 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
         };
 
         self.pop_the_same_key_as(cur.1.key())?;
-        if let Err(e) = cur.1.next() {
-            return Err(e);
-        } else if cur.1.is_valid() {
+        cur.1.next()?;
+        if cur.1.is_valid() {
             self.iters.push(cur);
         }
 

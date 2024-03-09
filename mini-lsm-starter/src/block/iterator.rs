@@ -59,7 +59,8 @@ impl BlockIterator {
     /// Returns true if the iterator is valid.
     /// Note: You may want to make use of `key`
     pub fn is_valid(&self) -> bool {
-        self.value_range.0 < self.block.data.len()
+        // we should allow eq
+        self.value_range.0 <= self.value_range.1
     }
 
     /// Seeks to the first key in the block.
@@ -73,7 +74,7 @@ impl BlockIterator {
         let offset = self.value_range.1;
         if offset == self.block.data.len() {
             self.key.clear();
-            self.value_range = (self.block.data.len(), self.block.data.len());
+            self.value_range = (self.block.data.len(), 0);
             return;
         }
 
