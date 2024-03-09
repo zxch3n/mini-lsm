@@ -417,8 +417,11 @@ impl LsmStorageInner {
                         .unwrap(),
                 ),
                 Bound::Excluded(x) => Box::new(
-                    SsTableIterator::create_and_seek_to_key(t.clone(), KeySlice::from_slice(x))
-                        .unwrap(),
+                    SsTableIterator::create_and_seek_to_key_exclusive(
+                        t.clone(),
+                        KeySlice::from_slice(x),
+                    )
+                    .unwrap(),
                 ),
                 Bound::Unbounded => {
                     Box::new(SsTableIterator::create_and_seek_to_first(t.clone()).unwrap())
@@ -426,7 +429,7 @@ impl LsmStorageInner {
             });
         }
 
-        let iter = FusedIterator::new(LsmIterator::new_with_end_when(
+        let iter = FusedIterator::new(LsmIterator::new_with_range(
             TwoMergeIterator::create(
                 MergeIterator::create(memtable_iters),
                 MergeIterator::create(sstable_iters),

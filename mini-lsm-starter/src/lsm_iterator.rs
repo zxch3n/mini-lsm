@@ -36,10 +36,7 @@ impl LsmIterator {
         })
     }
 
-    pub(crate) fn new_with_end_when(
-        iter: LsmIteratorInner,
-        end_when: Bound<Vec<u8>>,
-    ) -> Result<Self> {
+    pub(crate) fn new_with_range(iter: LsmIteratorInner, end_when: Bound<Vec<u8>>) -> Result<Self> {
         Ok(Self {
             ended: !iter.is_valid() || !in_bound(iter.key().raw_ref(), &end_when),
             inner: iter,

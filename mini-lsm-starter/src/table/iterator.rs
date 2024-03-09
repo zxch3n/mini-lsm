@@ -47,6 +47,23 @@ impl SsTableIterator {
         })
     }
 
+    /// Create a new iterator and seek to the first key-value pair which > `key`.
+    pub fn create_and_seek_to_key_exclusive(table: Arc<SsTable>, key: KeySlice) -> Result<Self> {
+        let idx = table.find_block_idx(key);
+        let block = table.read_block_cached(idx)?;
+        let block_iter = BlockIterator::create_and_seek_to_key(block, key);
+        let mut iter = SsTableIterator {
+            table,
+            blk_iter: block_iter,
+            blk_idx: idx,
+        };
+        if iter.is_valid() && iter.key() == key {
+            iter.next()?;
+        }
+
+        Ok(iter)
+    }
+
     /// Seek to the first key-value pair which >= `key`.
     /// Note: You probably want to review the handout for detailed explanation when implementing
     /// this function.
