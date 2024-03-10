@@ -36,27 +36,28 @@ impl BlockBuilder {
             panic!("Key and value are too large");
         }
 
-        let new_len = 2 + 2 + key.len() + value.len();
+        let start_offset = self.data.len() as u16;
         if self.first_key.is_empty() {
             self.first_key.set_from_slice(key);
-        } else if new_len + self.bytes_size() > self.block_size {
-            // too large
-            return false;
+            self.data.extend((key.len() as u16).to_be_bytes());
+            self.data.extend_from_slice(key.raw_ref());
+        } else {
+            // use key compression
+            let overlap_len = how_many_same_prefix(&self.first_key, key);
+            let rest_len = key.len() - overlap_len;
+            let new_len = 4 + rest_len + value.len() + 2;
+            if new_len + self.bytes_size() > self.block_size {
+                // too large
+                return false;
+            }
+
+            self.data.extend((overlap_len as u16).to_be_bytes());
+            self.data.extend((rest_len as u16).to_be_bytes());
+            self.data.extend_from_slice(&key.raw_ref()[overlap_len..]);
         }
 
-        self.data.reserve(new_len);
-        let start_offset = self.data.len() as u16;
-        let bytes = (key.len() as u16).to_be_bytes();
-        self.data.push(bytes[0]);
-        self.data.push(bytes[1]);
-        self.data.extend_from_slice(key.raw_ref());
-
-        let end_offset = self.data.len() as u16;
-        let bytes = (value.len() as u16).to_be_bytes();
-        self.data.push(bytes[0]);
-        self.data.push(bytes[1]);
+        self.data.extend((value.len() as u16).to_be_bytes());
         self.data.extend_from_slice(value);
-
         self.offsets.push(start_offset);
         true
     }
@@ -77,4 +78,17 @@ impl BlockBuilder {
             offsets: self.offsets,
         }
     }
+}
+
+fn how_many_same_prefix(first: &KeyVec, target: KeySlice) -> usize {
+    let mut i = 0;
+    for (a, b) in first.raw_ref().iter().zip(target.raw_ref().iter()) {
+        if a != b {
+            break;
+        }
+
+        i += 1;
+    }
+
+    i
 }

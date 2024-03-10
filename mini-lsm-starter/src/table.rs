@@ -131,22 +131,23 @@ impl SsTable {
 
     /// Open SSTable from a file.
     pub fn open(id: usize, block_cache: Option<Arc<BlockCache>>, file: FileObject) -> Result<Self> {
-        let mut offset_bytes = [0, 0, 0, 0];
-        let f = &file.0.as_ref().unwrap();
-        f.read_exact_at(&mut offset_bytes, file.1 - 4)?;
-        let offset = u32::from_be_bytes(offset_bytes) as u64;
-        let mut meta = vec![0; file.1 as usize - offset as usize - 4];
-        f.read_exact_at(&mut meta, offset)?;
-        let block_meta = BlockMeta::decode_block_meta(Cursor::new(meta));
+        let f = file.0.as_ref().unwrap();
+        let bloom_offset = read_last_u32(f, &file, file.1 as usize)?;
+        let bloom_section = file.read(bloom_offset as u64, file.1 - 4 - bloom_offset as u64)?;
+        let bloom = Bloom::decode(&bloom_section)?;
+        let meta_offset = read_last_u32(f, &file, bloom_offset as usize)?;
+        let mut block_meta_section = vec![0; bloom_offset - meta_offset - 4];
+        f.read_exact_at(&mut block_meta_section, meta_offset as u64)?;
+        let block_meta = BlockMeta::decode_block_meta(Cursor::new(block_meta_section));
         Ok(Self {
             file,
             first_key: block_meta[0].first_key.clone(),
             last_key: block_meta[block_meta.len() - 1].last_key.clone(),
             block_meta,
-            block_meta_offset: offset as usize,
+            block_meta_offset: meta_offset as usize,
             id,
             block_cache,
-            bloom: None,
+            bloom: Some(bloom),
             max_ts: 0,
         })
     }
@@ -242,4 +243,11 @@ impl SsTable {
     pub fn max_ts(&self) -> u64 {
         self.max_ts
     }
+}
+
+fn read_last_u32(f: &File, file: &FileObject, end: usize) -> Result<usize, anyhow::Error> {
+    let mut offset_bytes = [0, 0, 0, 0];
+    f.read_exact_at(&mut offset_bytes, end as u64 - 4)?;
+    let offset = u32::from_be_bytes(offset_bytes) as usize;
+    Ok(offset)
 }

@@ -124,6 +124,12 @@ fn test_block_seek_key() {
         for i in 0..num_of_keys() {
             let key = iter.key();
             let value = iter.value();
+            eprintln!(
+                "test key {:?} value {:?} expected_key={:?}",
+                key.for_testing_key_ref(),
+                value,
+                key_of(i).for_testing_key_ref()
+            );
             assert_eq!(
                 key.for_testing_key_ref(),
                 key_of(i).for_testing_key_ref(),

@@ -1,7 +1,7 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
-use std::sync::Arc;
+use std::{cmp::Ordering, sync::Arc};
 
 use crate::key::{Key, KeySlice, KeyVec};
 
@@ -70,19 +70,25 @@ impl BlockIterator {
 
     /// Move to the next key in the block.
     pub fn next(&mut self) {
-        let d = &self.block.data;
-        let offset = self.value_range.1;
+        let mut offset = self.value_range.1;
         if offset == self.block.data.len() {
             self.key.clear();
             self.value_range = (self.block.data.len(), 0);
             return;
         }
 
-        let key_len = u16::from_be_bytes([d[offset], d[offset + 1]]) as usize;
-        self.key = Key::from_vec(d[offset + 2..offset + 2 + key_len].to_vec());
-        let value_len =
-            u16::from_be_bytes([d[offset + 2 + key_len], d[offset + 3 + key_len]]) as usize;
-        let value_start = offset + 4 + key_len;
+        self.seek_to_offset(offset);
+    }
+
+    fn seek_to_offset(&mut self, mut offset: usize) {
+        let d = &self.block.data;
+        let (key_l, key_r) = self.block.decode_key_at_offset(&mut offset);
+        let mut vec = Vec::with_capacity(key_l.len() + key_r.len());
+        vec.extend(key_l);
+        vec.extend(key_r);
+        self.key = Key::from_vec(vec);
+        let value_len = u16::from_be_bytes([d[offset], d[offset + 1]]) as usize;
+        let value_start = offset + 2;
         self.value_range = (value_start, value_start + value_len);
     }
 
@@ -95,7 +101,7 @@ impl BlockIterator {
         let mut mid = (min + max) / 2;
         let mut mid_v = self.get_nth_key(mid);
         while min != max {
-            match mid_v.cmp(&key) {
+            match compare(mid_v, key.raw_ref()) {
                 std::cmp::Ordering::Less => {
                     min = mid + 1;
                 }
@@ -112,27 +118,48 @@ impl BlockIterator {
         }
 
         // find the first key that >= key
-        while mid > 0 && self.get_nth_key(mid - 1) >= key {
+        while mid > 0
+            && matches!(
+                compare(self.get_nth_key(mid - 1), key.raw_ref()),
+                Ordering::Greater | Ordering::Equal
+            )
+        {
             mid -= 1;
         }
 
         self.seek_nth(mid)
     }
 
-    fn get_nth_key(&mut self, n: usize) -> KeySlice {
-        let start = self.block.offsets[n] as usize;
-        let d = &self.block.data;
-        let len = u16::from_be_bytes([d[start], d[start + 1]]) as usize;
-        Key::from_slice(&d[start + 2..start + 2 + len])
+    fn get_nth_key(&mut self, n: usize) -> (&[u8], &[u8]) {
+        self.block.nth_key(n)
     }
 
     fn seek_nth(&mut self, n: usize) {
-        let start = self.block.offsets[n] as usize;
-        let d = &self.block.data;
-        let key_len = u16::from_be_bytes([d[start], d[start + 1]]) as usize;
-        self.key = Key::from_vec(d[start + 2..start + 2 + key_len].to_vec());
-        let value_len =
-            u16::from_be_bytes([d[start + 2 + key_len], d[start + 3 + key_len]]) as usize;
-        self.value_range = (start + 4 + key_len, start + 4 + key_len + value_len);
+        let offset = self.block.offsets[n];
+        self.seek_to_offset(offset as usize);
     }
+}
+
+fn compare(pair: (&[u8], &[u8]), rhs: &[u8]) -> Ordering {
+    let (l, r) = pair;
+    if rhs.len() < l.len() {
+        return l.cmp(rhs);
+    }
+
+    let (rhs_a, rhs_b) = rhs.split_at(l.len());
+    let ans = l.cmp(rhs_a).then_with(|| r.cmp(rhs_b));
+    ans
+}
+
+fn compare_pair(lhs: (&[u8], &[u8]), rhs: (&[u8], &[u8])) -> Ordering {
+    let lhs_iter = lhs.0.iter().chain(lhs.1.iter());
+    let rhs_iter = rhs.0.iter().chain(rhs.1.iter());
+    for (a, b) in lhs_iter.zip(rhs_iter) {
+        match a.cmp(b) {
+            Ordering::Equal => {}
+            x => return x,
+        }
+    }
+
+    (lhs.0.len() + lhs.1.len()).cmp(&(rhs.0.len() + rhs.1.len()))
 }

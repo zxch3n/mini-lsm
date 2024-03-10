@@ -49,8 +49,29 @@ impl Block {
         self.offsets.len()
     }
 
-    pub fn nth_key(&self, n: usize) -> &[u8] {
-        let start = self.offsets[n] as usize;
+    pub fn nth_key(&self, n: usize) -> (&[u8], &[u8]) {
+        let mut start = self.offsets[n] as usize;
+        self.decode_key_at_offset(&mut start)
+    }
+
+    pub(crate) fn decode_key_at_offset(&self, offset: &mut usize) -> (&[u8], &[u8]) {
+        if *offset == 0 {
+            let ans: (&[u8], &[u8]) = (self.first_key(), &[]);
+            *offset += 2 + ans.0.len();
+            ans
+        } else {
+            let d = &self.data;
+            let overlap_len = u16::from_be_bytes([d[*offset], d[*offset + 1]]) as usize;
+            let rest_len = u16::from_be_bytes([d[*offset + 2], d[*offset + 3]]) as usize;
+            let overlapped = &self.first_key()[..overlap_len];
+            let rest = &d[*offset + 4..*offset + 4 + rest_len];
+            *offset += 4 + rest_len;
+            (overlapped, rest)
+        }
+    }
+
+    pub(crate) fn first_key(&self) -> &[u8] {
+        let start = self.offsets[0] as usize;
         let d = &self.data;
         let len = u16::from_be_bytes([d[start], d[start + 1]]) as usize;
         &d[start + 2..start + 2 + len]
