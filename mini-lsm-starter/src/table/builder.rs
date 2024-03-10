@@ -126,4 +126,8 @@ impl SsTableBuilder {
     pub(crate) fn build_for_test(self, path: impl AsRef<Path>) -> Result<SsTable> {
         self.build(0, None, path)
     }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.key_hashes.is_empty()
+    }
 }

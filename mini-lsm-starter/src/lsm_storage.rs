@@ -16,10 +16,11 @@ use crate::compact::{
     CompactionController, CompactionOptions, LeveledCompactionController, LeveledCompactionOptions,
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, TieredCompactionController,
 };
+use crate::iterators::concat_iterator::SstConcatIterator;
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::iterators::StorageIterator;
-use crate::key::KeySlice;
+use crate::key::{Key, KeySlice};
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
 use crate::mem_table::MemTable;
@@ -310,7 +311,11 @@ impl LsmStorageInner {
             }
         }
 
-        for id in state.l0_sstables.iter() {
+        for id in state
+            .l0_sstables
+            .iter()
+            .chain(state.levels.iter().flat_map(|x| x.1.iter()))
+        {
             let t = state.sstables.get(id).unwrap();
             if !t.may_contain(key) {
                 continue;
@@ -437,7 +442,7 @@ impl LsmStorageInner {
             memtable_iters.push(Box::new(t.scan(lower, upper)));
         }
 
-        let mut sstable_iters = Vec::with_capacity(state.sstables.len());
+        let mut l0_sstable_iters = Vec::with_capacity(state.sstables.len());
         for id in state.l0_sstables.iter() {
             let t = state.sstables.get(id).unwrap();
             if !range_overlap(
@@ -447,7 +452,7 @@ impl LsmStorageInner {
                 continue;
             }
 
-            sstable_iters.push(match lower {
+            l0_sstable_iters.push(match lower {
                 Bound::Included(x) => Box::new(
                     SsTableIterator::create_and_seek_to_key(t.clone(), KeySlice::from_slice(x))
                         .unwrap(),
@@ -465,10 +470,43 @@ impl LsmStorageInner {
             });
         }
 
+        let mut rest_sstables = Vec::new();
+        for (_level, ids) in state.levels.iter() {
+            for id in ids {
+                let t = state.sstables.get(id).unwrap();
+                if !range_overlap(
+                    (lower, upper),
+                    (t.first_key().raw_ref(), t.last_key().raw_ref()),
+                ) {
+                    continue;
+                }
+
+                rest_sstables.push(t.clone());
+            }
+        }
+        let concat_iter = match lower {
+            Bound::Included(x) => {
+                SstConcatIterator::create_and_seek_to_key(rest_sstables, Key::from_slice(x))?
+            }
+            Bound::Excluded(x) => {
+                let mut iter =
+                    SstConcatIterator::create_and_seek_to_key(rest_sstables, Key::from_slice(x))?;
+                if iter.is_valid() && iter.key().raw_ref() == x {
+                    iter.next()?;
+                }
+                iter
+            }
+            Bound::Unbounded => SstConcatIterator::create_and_seek_to_first(rest_sstables)?,
+        };
+
         let iter = FusedIterator::new(LsmIterator::new_with_range(
             TwoMergeIterator::create(
-                MergeIterator::create(memtable_iters),
-                MergeIterator::create(sstable_iters),
+                TwoMergeIterator::create(
+                    MergeIterator::create(memtable_iters),
+                    MergeIterator::create(l0_sstable_iters),
+                )
+                .unwrap(),
+                concat_iter,
             )
             .unwrap(),
             match upper {
@@ -478,6 +516,17 @@ impl LsmStorageInner {
             },
         )?);
         Ok(iter)
+    }
+
+    pub(crate) fn log_all(&self) {
+        eprintln!("log_all");
+        let s = self.state.read();
+        dbg!(&s.l0_sstables, &s.levels);
+        let mut iter = self.scan(Bound::Unbounded, Bound::Unbounded).unwrap();
+        while iter.is_valid() {
+            dbg!(iter.key(), iter.value());
+            iter.next().unwrap();
+        }
     }
 }
 

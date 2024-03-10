@@ -4,6 +4,7 @@ mod leveled;
 mod simple_leveled;
 mod tiered;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,8 +16,10 @@ pub use simple_leveled::{
 };
 pub use tiered::{TieredCompactionController, TieredCompactionOptions, TieredCompactionTask};
 
+use crate::iterators::merge_iterator::MergeIterator;
+use crate::iterators::StorageIterator;
 use crate::lsm_storage::{LsmStorageInner, LsmStorageState};
-use crate::table::SsTable;
+use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum CompactionTask {
@@ -107,12 +110,99 @@ pub enum CompactionOptions {
 }
 
 impl LsmStorageInner {
-    fn compact(&self, _task: &CompactionTask) -> Result<Vec<Arc<SsTable>>> {
-        unimplemented!()
+    fn compact(&self, task: &CompactionTask) -> Result<Vec<Arc<SsTable>>> {
+        let state = {
+            let s = self.state.read();
+            Arc::clone(&s)
+        };
+
+        let mut ans = vec![];
+        match task {
+            CompactionTask::Leveled(_) => todo!(),
+            CompactionTask::Tiered(_) => todo!(),
+            CompactionTask::Simple(_) => todo!(),
+            CompactionTask::ForceFullCompaction {
+                l0_sstables,
+                l1_sstables,
+            } => {
+                let mut builder = SsTableBuilder::new(self.options.block_size);
+                let mut iter: MergeIterator<SsTableIterator> = MergeIterator::create(
+                    l0_sstables
+                        .iter()
+                        .chain(l1_sstables.iter())
+                        .map(|x| -> anyhow::Result<Box<SsTableIterator>> {
+                            let table = state.sstables[x].clone();
+                            Ok(Box::new(SsTableIterator::create_and_seek_to_first(table)?))
+                        })
+                        .collect::<Result<Vec<Box<_>>>>()?,
+                );
+
+                while iter.is_valid() {
+                    if !iter.value().is_empty() {
+                        // we can ignore deleted value in full compaction
+                        builder.add(iter.key(), iter.value());
+                    }
+                    if builder.estimated_size() >= self.options.target_sst_size {
+                        let id = self.next_sst_id();
+                        let sst = builder.build(
+                            id,
+                            Some(self.block_cache.clone()),
+                            self.path_of_sst(id),
+                        )?;
+                        builder = SsTableBuilder::new(self.options.block_size);
+                        ans.push(Arc::new(sst));
+                    }
+                    iter.next()?;
+                }
+
+                if !builder.is_empty() {
+                    let id = self.next_sst_id();
+                    let sst =
+                        builder.build(id, Some(self.block_cache.clone()), self.path_of_sst(id))?;
+                    ans.push(Arc::new(sst));
+                }
+            }
+        }
+
+        Ok(ans)
     }
 
     pub fn force_full_compaction(&self) -> Result<()> {
-        unimplemented!()
+        let tables = {
+            let s = self.state.read();
+            (s.l0_sstables.clone(), s.levels[0].1.clone())
+        };
+
+        let original_l0: HashSet<usize> = tables.0.iter().cloned().collect();
+        let original_l1_len = tables.1.len();
+        let ans = self.compact(&CompactionTask::ForceFullCompaction {
+            l0_sstables: tables.0,
+            l1_sstables: tables.1,
+        })?;
+        {
+            let _g = self.state_lock.lock();
+            let mut binding = self.state.write();
+            let state = Arc::make_mut(&mut binding);
+            state.l0_sstables.retain(|x| {
+                if original_l0.contains(x) {
+                    let _sst = state.sstables.remove(x).unwrap();
+                    // TODO: remove sst file
+                    false
+                } else {
+                    true
+                }
+            });
+            assert_eq!(state.levels[0].1.len(), original_l1_len);
+            for s in state.levels[0].1.drain(..) {
+                let _sst = state.sstables.remove(&s).unwrap();
+                // TODO: remove sst file
+            }
+            for sstable in ans {
+                state.levels[0].1.push(sstable.sst_id());
+                state.sstables.insert(sstable.sst_id(), sstable);
+            }
+        }
+        Ok(())
     }
 
     fn trigger_compaction(&self) -> Result<()> {
@@ -151,8 +241,7 @@ impl LsmStorageInner {
         }
 
         drop(s);
-        self.force_flush_next_imm_memtable();
-        Ok(())
+        self.force_flush_next_imm_memtable()
     }
 
     pub(crate) fn spawn_flush_thread(
