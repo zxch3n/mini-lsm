@@ -243,6 +243,18 @@ impl SsTable {
     pub fn max_ts(&self) -> u64 {
         self.max_ts
     }
+
+    pub fn may_contain(&self, key: &[u8]) -> bool {
+        if key < self.first_key().raw_ref() || key > self.last_key().raw_ref() {
+            return false;
+        }
+
+        if let Some(bloom) = self.bloom.as_ref() {
+            return bloom.may_contain(farmhash::fingerprint32(key));
+        }
+
+        true
+    }
 }
 
 fn read_last_u32(f: &File, file: &FileObject, end: usize) -> Result<usize, anyhow::Error> {

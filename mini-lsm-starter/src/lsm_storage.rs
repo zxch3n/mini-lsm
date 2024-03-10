@@ -312,6 +312,10 @@ impl LsmStorageInner {
 
         for id in state.l0_sstables.iter() {
             let t = state.sstables.get(id).unwrap();
+            if !t.may_contain(key) {
+                continue;
+            }
+
             let iter =
                 SsTableIterator::create_and_seek_to_key(t.clone(), KeySlice::from_slice(key))?;
             if iter.is_valid() && iter.key().raw_ref() == key {
