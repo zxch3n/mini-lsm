@@ -55,6 +55,10 @@ impl SsTableBuilder {
 
     fn extract_built(&mut self) {
         let builder = std::mem::replace(&mut self.builder, BlockBuilder::new(self.block_size));
+        if builder.is_empty() {
+            return;
+        }
+
         let block = builder.build();
         if self.first_key.is_empty() {
             self.first_key = block.first_key().to_vec();

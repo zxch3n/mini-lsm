@@ -84,9 +84,15 @@ impl StorageIterator for SstConcatIterator {
     }
 
     fn next(&mut self) -> Result<()> {
+        if let Some(current) = self.current.as_mut() {
+            current.next()?;
+            if current.is_valid() {
+                return Ok(());
+            }
+        }
+
         loop {
             if let Some(current) = self.current.as_mut() {
-                current.next()?;
                 if current.is_valid() {
                     return Ok(());
                 }

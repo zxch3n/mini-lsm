@@ -1,5 +1,6 @@
 #![allow(dead_code)] // REMOVE THIS LINE after fully implementing this functionality
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::ops::Bound;
@@ -311,11 +312,7 @@ impl LsmStorageInner {
             }
         }
 
-        for id in state
-            .l0_sstables
-            .iter()
-            .chain(state.levels.iter().flat_map(|x| x.1.iter()))
-        {
+        for id in state.l0_sstables.iter() {
             let t = state.sstables.get(id).unwrap();
             if !t.may_contain(key) {
                 continue;
@@ -329,6 +326,41 @@ impl LsmStorageInner {
                 }
 
                 return Ok(Some(Bytes::copy_from_slice(iter.value())));
+            }
+        }
+
+        for (_i, level) in state.levels.iter() {
+            let result = level.binary_search_by(|x| {
+                let t = state.sstables.get(x).unwrap();
+                if t.first_key().raw_ref() > key {
+                    Ordering::Greater
+                } else if t.last_key().raw_ref() < key {
+                    Ordering::Less
+                } else {
+                    Ordering::Equal
+                }
+            });
+
+            match result {
+                Ok(x) => {
+                    let t = state.sstables.get(&level[x]).unwrap();
+                    if !t.may_contain(key) {
+                        continue;
+                    }
+
+                    let iter = SsTableIterator::create_and_seek_to_key(
+                        t.clone(),
+                        KeySlice::from_slice(key),
+                    )?;
+                    if iter.is_valid() && iter.key().raw_ref() == key {
+                        if iter.value().is_empty() {
+                            return Ok(None);
+                        }
+
+                        return Ok(Some(Bytes::copy_from_slice(iter.value())));
+                    }
+                }
+                Err(_) => continue,
             }
         }
 
@@ -523,14 +555,22 @@ impl LsmStorageInner {
     }
 
     pub(crate) fn log_all(&self) {
-        eprintln!("log_all");
-        let s = self.state.read();
-        dbg!(&s.l0_sstables, &s.levels);
         let mut iter = self.scan(Bound::Unbounded, Bound::Unbounded).unwrap();
         while iter.is_valid() {
             dbg!(iter.key(), iter.value());
             iter.next().unwrap();
         }
+    }
+
+    pub(crate) fn get_all(&self) -> HashMap<Vec<u8>, Vec<u8>> {
+        let mut ans = HashMap::new();
+        let mut iter = self.scan(Bound::Unbounded, Bound::Unbounded).unwrap();
+        while iter.is_valid() {
+            ans.insert(iter.key().to_vec(), iter.value().to_vec());
+            iter.next().unwrap();
+        }
+
+        ans
     }
 }
 
