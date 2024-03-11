@@ -470,8 +470,9 @@ impl LsmStorageInner {
             });
         }
 
-        let mut rest_sstables = Vec::new();
+        let mut l1_and_above = Vec::new();
         for (_level, ids) in state.levels.iter() {
+            let mut sstables = Vec::new();
             for id in ids {
                 let t = state.sstables.get(id).unwrap();
                 if !range_overlap(
@@ -481,23 +482,26 @@ impl LsmStorageInner {
                     continue;
                 }
 
-                rest_sstables.push(t.clone());
+                sstables.push(t.clone());
             }
-        }
-        let concat_iter = match lower {
-            Bound::Included(x) => {
-                SstConcatIterator::create_and_seek_to_key(rest_sstables, Key::from_slice(x))?
-            }
-            Bound::Excluded(x) => {
-                let mut iter =
-                    SstConcatIterator::create_and_seek_to_key(rest_sstables, Key::from_slice(x))?;
-                if iter.is_valid() && iter.key().raw_ref() == x {
-                    iter.next()?;
+
+            let concat_iter = match lower {
+                Bound::Included(x) => {
+                    SstConcatIterator::create_and_seek_to_key(sstables, Key::from_slice(x))?
                 }
-                iter
-            }
-            Bound::Unbounded => SstConcatIterator::create_and_seek_to_first(rest_sstables)?,
-        };
+                Bound::Excluded(x) => {
+                    let mut iter =
+                        SstConcatIterator::create_and_seek_to_key(sstables, Key::from_slice(x))?;
+                    if iter.is_valid() && iter.key().raw_ref() == x {
+                        iter.next()?;
+                    }
+                    iter
+                }
+                Bound::Unbounded => SstConcatIterator::create_and_seek_to_first(sstables)?,
+            };
+
+            l1_and_above.push(Box::new(concat_iter));
+        }
 
         let iter = FusedIterator::new(LsmIterator::new_with_range(
             TwoMergeIterator::create(
@@ -506,7 +510,7 @@ impl LsmStorageInner {
                     MergeIterator::create(l0_sstable_iters),
                 )
                 .unwrap(),
-                concat_iter,
+                MergeIterator::create(l1_and_above),
             )
             .unwrap(),
             match upper {
