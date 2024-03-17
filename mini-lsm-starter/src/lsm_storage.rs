@@ -312,20 +312,22 @@ impl LsmStorageInner {
             }
         }
 
-        for id in state.l0_sstables.iter() {
-            let t = state.sstables.get(id).unwrap();
-            if !t.may_contain(key) {
-                continue;
-            }
-
-            let iter =
-                SsTableIterator::create_and_seek_to_key(t.clone(), KeySlice::from_slice(key))?;
-            if iter.is_valid() && iter.key().raw_ref() == key {
-                if iter.value().is_empty() {
-                    return Ok(None);
+        if self.compaction_controller.flush_to_l0() {
+            for id in state.l0_sstables.iter() {
+                let t = state.sstables.get(id).unwrap();
+                if !t.may_contain(key) {
+                    continue;
                 }
 
-                return Ok(Some(Bytes::copy_from_slice(iter.value())));
+                let iter =
+                    SsTableIterator::create_and_seek_to_key(t.clone(), KeySlice::from_slice(key))?;
+                if iter.is_valid() && iter.key().raw_ref() == key {
+                    if iter.value().is_empty() {
+                        return Ok(None);
+                    }
+
+                    return Ok(Some(Bytes::copy_from_slice(iter.value())));
+                }
             }
         }
 
@@ -448,7 +450,12 @@ impl LsmStorageInner {
         )?;
         let mut s = self.state.write();
         let s = Arc::make_mut(&mut s);
-        s.l0_sstables.insert(0, id);
+        if self.compaction_controller.flush_to_l0() {
+            s.l0_sstables.insert(0, id);
+        } else {
+            s.levels.insert(0, (id, vec![id]));
+        }
+
         s.sstables.insert(id, Arc::new(sstable));
         Ok(())
     }
@@ -475,31 +482,33 @@ impl LsmStorageInner {
         }
 
         let mut l0_sstable_iters = Vec::with_capacity(state.sstables.len());
-        for id in state.l0_sstables.iter() {
-            let t = state.sstables.get(id).unwrap();
-            if !range_overlap(
-                (lower, upper),
-                (t.first_key().raw_ref(), t.last_key().raw_ref()),
-            ) {
-                continue;
-            }
-
-            l0_sstable_iters.push(match lower {
-                Bound::Included(x) => Box::new(
-                    SsTableIterator::create_and_seek_to_key(t.clone(), KeySlice::from_slice(x))
-                        .unwrap(),
-                ),
-                Bound::Excluded(x) => Box::new(
-                    SsTableIterator::create_and_seek_to_key_exclusive(
-                        t.clone(),
-                        KeySlice::from_slice(x),
-                    )
-                    .unwrap(),
-                ),
-                Bound::Unbounded => {
-                    Box::new(SsTableIterator::create_and_seek_to_first(t.clone()).unwrap())
+        if self.compaction_controller.flush_to_l0() {
+            for id in state.l0_sstables.iter() {
+                let t = state.sstables.get(id).unwrap();
+                if !range_overlap(
+                    (lower, upper),
+                    (t.first_key().raw_ref(), t.last_key().raw_ref()),
+                ) {
+                    continue;
                 }
-            });
+
+                l0_sstable_iters.push(match lower {
+                    Bound::Included(x) => Box::new(
+                        SsTableIterator::create_and_seek_to_key(t.clone(), KeySlice::from_slice(x))
+                            .unwrap(),
+                    ),
+                    Bound::Excluded(x) => Box::new(
+                        SsTableIterator::create_and_seek_to_key_exclusive(
+                            t.clone(),
+                            KeySlice::from_slice(x),
+                        )
+                        .unwrap(),
+                    ),
+                    Bound::Unbounded => {
+                        Box::new(SsTableIterator::create_and_seek_to_first(t.clone()).unwrap())
+                    }
+                });
+            }
         }
 
         let mut l1_and_above = Vec::new();
